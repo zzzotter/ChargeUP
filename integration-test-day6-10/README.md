@@ -51,8 +51,5 @@ python3 -m pytest
 ## 五、待团队确认项
 
 1. 第 6–10 天 DTO 字段/枚举为建议值；统计退款是否冲减支出口径待冻结；
-2. 沿用未决项：微信 xlsx 措辞、0 元记录去留、是否新增 NON_CASH 枚举。
+2. 沿用未决项：0 元记录去留、是否新增 NON_CASH 枚举。
 
-## 六、后端交付后
-
-实现 `gateway/http_gateway.py`，把 `MockGateway` 换成 `HttpGateway`，跑全量测试并按第 1 天 44 项清单验收；详见 `docs/integration-test-plan-6-10.md`。
