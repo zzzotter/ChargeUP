@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+/*
+ * 设计令牌（对应前端设计基线 §2）
+ * 只允许在此处出现十六进制色值；页面与组件一律引用令牌。
+ */
+@theme {
+  /* 画布与承载面 */
+  --color-canvas: #fdfbf7;
+  --color-surface: #ffffff;
+  --color-sunken: #f7f2ea;
+  --color-line: #e9e0d2;
+  --color-line-soft: #f3ebdd;
+
+  /* 文字四级 */
+  --color-ink: #241f1a;
+  --color-ink-2: #5c5348;
+  --color-ink-3: #8c8175;
+  --color-ink-4: #a79c8c;
+
+  /* 三种语义强调色：珊瑚粉 / 薄荷绿 / 丁香紫 */
+  --color-coral: #ff8ba7;
+  --color-coral-50: #fff2f5;
+  --color-coral-100: #ffdce4;
+  --color-mint: #7dd8c0;
+  --color-mint-50: #eefaf7;
+  --color-mint-100: #d6f3eb;
+  --color-lilac: #b8a9e8;
+  --color-lilac-50: #f5f1fd;
+  --color-lilac-100: #e4dbf8;
+
+  /* 预警 80% / 告警 100% */
+  --color-warn: #e0a45e;
+  --color-warn-50: #fdf3e6;
+  --color-warn-100: #f3dfc4;
+  --color-alert: #de6b5e;
+  --color-alert-50: #fcedea;
+  --color-alert-100: #f6cdc6;
+
+  /* 语义色上的深色文字（保证在浅色底上的对比度） */
+  --color-coral-ink: #b4626f;
+  --color-mint-ink: #3e8e7b;
+  --color-lilac-ink: #6e5fa6;
+  --color-warn-ink: #a9712c;
+  --color-alert-ink: #b04b40;
+  --color-ink-on-coral: #4a222b;
+
+  /* 图表专用的暖色补充（仅用于分类配色，不承载语义） */
+  --color-clay: #d9c2a2;
+
+  /* 五档圆角 + pill */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+
+  /* 暖棕阴影：禁止纯黑 / 纯灰 */
+  --shadow-1: 0 2px 8px rgba(84, 66, 48, 0.06);
+  --shadow-2: 0 10px 24px rgba(84, 66, 48, 0.1);
+
+  /* 字体与缓动 */
+  --font-sans: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+  --font-mono: Consolas, ui-monospace, SFMono-Regular, monospace;
+  --ease-handbook: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+  }
+
+  ::selection {
+    background-color: var(--color-coral-100);
+    color: var(--color-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-coral);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* 交互规范：卡片 hover 上浮 2px（180ms），按钮按下缩放 0.98（120ms） */
+  .lift {
+    transition:
+      transform 180ms var(--ease-handbook),
+      box-shadow 180ms var(--ease-handbook);
+  }
+
+  .lift:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-2);
+  }
+
+  .press {
+    transition: transform 120ms var(--ease-handbook);
+  }
+
+  .press:active {
+    transform: scale(0.98);
+  }
+
+  /* 金额与数字统一等宽，避免列抖动 */
+  .nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 骨架屏：shimmer 扫光，禁止转圈 spinner（§4.2） */
+  .skeleton {
+    background-image: linear-gradient(
+      90deg,
+      var(--color-sunken) 0%,
+      color-mix(in srgb, var(--color-sunken), white 60%) 45%,
+      var(--color-sunken) 100%
+    );
+    background-size: 220% 100%;
+    border-radius: var(--radius-xs);
+    animation: lg-shimmer 1.4s var(--ease-handbook) infinite;
+  }
+}
+
+@keyframes lg-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
