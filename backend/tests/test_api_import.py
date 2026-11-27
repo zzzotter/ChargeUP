@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tests.support import ALIPAY_CSV, BROKEN_CSV, WECHAT_CSV
+from tests.support import ALIPAY_CSV, BROKEN_CSV, WECHAT_CSV, wechat_xlsx_bytes
 
 BASE = "/api/v1"
 
@@ -80,9 +80,22 @@ def test_missing_header_is_reported(api_client):
     assert "表头" in body["failures"][0]["reason"]
 
 
-def test_rejects_non_csv_filename(api_client):
-    response = upload(api_client, "bill.xlsx", b"whatever")
-    assert response.status_code == 422
+def test_import_wechat_xlsx(api_client):
+    response = upload(api_client, "wechat.xlsx", wechat_xlsx_bytes())
+    assert response.status_code == 201
+    body = response.json()
+    assert body["created"] == 4
+    assert body["failed"] == 0
+
+    listed = api_client.get(f"{BASE}/transactions").json()
+    assert listed["total"] == 4
+
+
+def test_rejects_unsupported_filename(api_client):
+    for filename in ("bill.pdf", "bill.xls", "bill.txt"):
+        response = upload(api_client, filename, b"whatever")
+        assert response.status_code == 422
+        assert ".csv" in response.json()["message"]
 
 
 def test_rejects_manual_source(api_client):

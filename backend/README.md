@@ -23,7 +23,7 @@
 
 ```
 app/
-  domain/        纯领域：实体、枚举、金额、分类/退款/统计/预算/CSV 解析（禁止 import 框架）
+  domain/        纯领域：实体、枚举、金额、分类/退款/统计/预算/账单解析（CSV+XLSX，禁止 import 框架）
   application/   用例编排：只依赖 domain 端口
   infrastructure/ SQLAlchemy 模型、仓储、工作单元、播种、日志脱敏
   interfaces/    FastAPI 路由、Pydantic DTO、统一错误处理
@@ -88,7 +88,7 @@ python scripts/check_domain_purity.py    # 领域层依赖门禁
 ```
 
 测试覆盖：金额分转换与溢出/上限/全角、规则优先级、退款识别（含误配回归）、统计口径、
-预算阈值幂等与事件失效/再激活、CSV 头部跳过/GBK/空行/缺列/乱码/拒识计数、导入幂等、
+预算阈值幂等与事件失效/再激活、CSV/XLSX 头部跳过/GBK/空行/缺列/乱码/拒识计数、导入幂等、
 显式来源、软删除、LIKE 转义、`.env` 加载、鉴权、文档保护、并发单号/预算冲突、
 改方向后分类一致性、统一错误结构与中文文案、上传限额、日志脱敏、领域层纯度。
 
@@ -115,7 +115,7 @@ python scripts/check_domain_purity.py    # 领域层依赖门禁
 | GET/POST | `/category-rules` | 规则列表（用户优先）/ 新建 |
 | DELETE | `/category-rules/{id}` | 删除用户规则；内置规则只读返回 409 |
 | POST | `/category-rules/test` | 干跑：命中分类与规则来源（RULE/BUILTIN） |
-| POST | `/imports/csv` | CSV 导入：幂等去重；返回 `ImportReport`（importId/created/duplicated/failed/durationMs） |
+| POST | `/imports/csv` | 账单导入（CSV / XLSX 按文件头自动识别）：幂等去重；返回 `ImportReport`（importId/created/duplicated/failed/durationMs） |
 | POST | `/imports/screenshot-candidates` | 截图候选批量入账（source=SCREENSHOT，自动生成 `SCR-*` 单号） |
 | GET | `/imports` | 导入历史分页 |
 | GET | `/imports/{id}/report` | 导入报告详情 |
@@ -145,8 +145,9 @@ python scripts/check_domain_purity.py    # 领域层依赖门禁
   用保存点捕获后重读再更新，并发 PUT 全部 200、以最后一次为准。
 - **方向变更**：PATCH 改 `direction` 时会校验并清空不兼容分类（转账一律无分类），
   避免「收入挂支出分类」导致统计与分类分布对不上。
-- **CSV 解析**：表头自适应识别（不写死 24/16 行）；单行异常只拒识该行；`failed` 为真实总数，
-  `failures` 明细最多 50 条；显式 `source` 优先于内容探测。
+- **账单解析**：CSV（utf-8/gb18030）与 XLSX（openpyxl，含数字金额/日期单元格）共用表头自适应识别
+  （不写死 24/16 行）；单行异常只拒识该行；`failed` 为真实总数，
+  `failures` 明细最多 50 条；显式 `source` 优先于内容探测；旧版 `.xls` 提示另存为 `.xlsx`/`.csv`。
 - **上传统计**：先看 `Content-Length` 快速拒绝，再按 256KB 分块读取，超限立即中断。
 - **脱敏**：拒识原文与日志都会遮蔽 11 位以上数字/长单号后再输出。
 

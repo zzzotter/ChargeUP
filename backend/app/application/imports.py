@@ -1,4 +1,4 @@
-"""CSV 导入与截图候选入账用例。
+"""账单文件导入与截图候选入账用例。
 
 幂等口径（SRS F-P0-02）：基于 (source, external_id) 判重；
 文件内重复行与库内已存在单号都计入 duplicated，不产生重复流水。
@@ -27,7 +27,7 @@ from app.domain.enums import Direction, Source
 from app.domain.errors import ConflictError, NotFoundError
 from app.domain.ports.clock import Clock
 from app.domain.ports.repositories import UnitOfWork
-from app.domain.services.csv_parser import parse_csv
+from app.domain.services.csv_parser import parse_bill
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,16 +47,16 @@ class ImportService:
         self._on_change = tuple(on_change)
         self._transactions = transactions
 
-    def import_csv(
+    def import_bill(
         self,
         filename: str,
         content: bytes,
         *,
         source: Source | None = None,
     ) -> ImportReportData:
-        """source 显式指定时优先采用；未指定时按文件内容探测（默认支付宝）。"""
+        """CSV / XLSX 自动识别；source 显式指定时优先采用，未指定时按内容探测（默认支付宝）。"""
         started = perf_counter()
-        parsed = parse_csv(
+        parsed = parse_bill(
             content, tzinfo=self._tz, default_source=Source.ALIPAY, explicit_source=source
         )
 
@@ -130,7 +130,7 @@ class ImportService:
 
         if candidates:
             LOGGER.info(
-                "CSV 导入完成 file=%s source=%s created=%d duplicates=%d failed=%d",
+                "账单导入完成 file=%s source=%s created=%d duplicates=%d failed=%d",
                 filename,
                 parsed.source.value,
                 len(candidates),

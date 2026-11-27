@@ -8,6 +8,7 @@ python-multipart>=0.0.9
 python-dotenv>=1.0
 tzdata>=2024.1
 pgvector>=0.3,<1.0
+openpyxl>=3.1,<4.0
 
 # PostgreSQL 驱动（3.14 暂无预编译包，推荐使用 Python 3.12/3.13 运行 PostgreSQL）
 psycopg[binary]>=3.2,<4.0 ; python_version < "3.14"

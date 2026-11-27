@@ -1,4 +1,4 @@
-"""导入路由：CSV 导入、截图候选入账、导入历史与报告。"""
+"""导入路由：账单文件（CSV/XLSX）导入、截图候选入账、导入历史与报告。"""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from app.interfaces.api.schemas import (
 router = APIRouter(prefix="/imports", tags=["导入"])
 
 _ALLOWED_SOURCES = (Source.ALIPAY, Source.WECHAT)
+_ALLOWED_EXTENSIONS = (".csv", ".xlsx", ".xlsm")
 _CHUNK_SIZE = 256 * 1024
 
 
@@ -53,17 +54,17 @@ async def _read_limited(file: UploadFile, limit: int) -> bytes:
     "/csv",
     response_model=ImportReportRead,
     status_code=201,
-    summary="导入微信/支付宝 CSV 账单",
+    summary="导入微信/支付宝账单（CSV / XLSX）",
 )
-async def import_csv(
+async def import_bill(
     request: Request,
-    file: UploadFile = File(..., description="微信/支付宝导出的 CSV 文件"),
+    file: UploadFile = File(..., description="微信/支付宝导出的 CSV 或 XLSX 文件"),
     source: Source | None = Form(default=None, description="显式指定来源，留空则按内容探测"),
     container: Container = Depends(get_container),
 ) -> ImportReportRead:
     filename = file.filename or "upload.csv"
-    if not filename.lower().endswith(".csv"):
-        raise ValidationError("仅支持 .csv 文件")
+    if not filename.lower().endswith(_ALLOWED_EXTENSIONS):
+        raise ValidationError("仅支持 .csv 或 .xlsx 文件")
     if source is not None and source not in _ALLOWED_SOURCES:
         raise ValidationError("source 仅支持 ALIPAY 或 WECHAT")
 
@@ -76,7 +77,7 @@ async def import_csv(
     if not content:
         raise ValidationError("文件内容为空")
 
-    return import_report_to_read(container.imports.import_csv(filename, content, source=source))
+    return import_report_to_read(container.imports.import_bill(filename, content, source=source))
 
 
 @router.post(

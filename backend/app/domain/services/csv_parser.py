@@ -1,4 +1,8 @@
-"""微信/支付宝 CSV 账单解析器（纯领域逻辑，独立于入库 API）。
+"""微信/支付宝账单解析器（纯领域逻辑，独立于入库 API）。
+
+支持两种导出格式：
+- 支付宝 .csv（GBK/GB18030）与微信 .csv；
+- 微信/支付宝 .xlsx（按文件头 zip 魔数识别，不依赖扩展名）。
 
 覆盖 SRS F-P0-01 的坏账单要求：
 - 跳过头部非数据行（支付宝 24 行、微信 16 行由「表头识别」自适应处理，不写死行号）；
@@ -13,7 +17,7 @@ import io
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app.domain.enums import Direction, ImportRowStatus, Source
@@ -193,14 +197,9 @@ def _parse_direction(raw: str, amount_cents: int, trade_type: str, description: 
     return Direction.EXPENSE if amount_cents >= 0 else Direction.INCOME
 
 
-def parse_csv(
-    content: bytes,
-    *,
-    tzinfo: ZoneInfo,
-    default_source: Source = Source.ALIPAY,
-    explicit_source: Source | None = None,
-) -> ParseResult:
-    text, encoding = decode_csv(content)
+def _resolve_source(
+    text: str, default_source: Source, explicit_source: Source | None
+) -> tuple[Source, tuple[str, ...]]:
     detected = detect_source(text, default=default_source)
     source = explicit_source or detected
     warnings: tuple[str, ...] = ()
@@ -209,8 +208,18 @@ def parse_csv(
             f"文件内容探测为 {detected.value}，与指定来源 {explicit_source.value} 不一致，"
             "已按指定来源导入",
         )
+    return source, warnings
 
-    rows = list(csv.reader(io.StringIO(text)))
+
+def _parse_rows(
+    rows: Sequence[Sequence[str]],
+    *,
+    tzinfo: ZoneInfo,
+    source: Source,
+    encoding: str,
+    warnings: tuple[str, ...],
+) -> ParseResult:
+    """CSV / XLSX 共用的表头识别与逐行校验。"""
     header_index: int | None = None
     columns: dict[str, int] | None = None
     for index, row in enumerate(rows):
@@ -330,4 +339,140 @@ def parse_csv(
         total_rows=data_rows,
         rejected_total=rejected,
         warnings=warnings,
+    )
+
+
+def parse_csv(
+    content: bytes,
+    *,
+    tzinfo: ZoneInfo,
+    default_source: Source = Source.ALIPAY,
+    explicit_source: Source | None = None,
+) -> ParseResult:
+    text, encoding = decode_csv(content)
+    source, warnings = _resolve_source(text, default_source, explicit_source)
+    rows = list(csv.reader(io.StringIO(text)))
+    return _parse_rows(rows, tzinfo=tzinfo, source=source, encoding=encoding, warnings=warnings)
+
+
+# XLSX 本质是 zip 容器；旧版 .xls 是 OLE 复合文档，openpyxl 无法读取，单独提示。
+_XLSX_MAGIC = b"PK\x03\x04"
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# 行数上限：防止压缩率极高的 xlsx（zip 炸弹）被完整展开后占满内存
+MAX_XLSX_ROWS = 20000
+
+
+def detect_format(content: bytes) -> str:
+    """按文件头识别账单格式，返回 "xlsx" / "xls" / "csv"。"""
+    if content.startswith(_XLSX_MAGIC):
+        return "xlsx"
+    if content.startswith(_OLE_MAGIC):
+        return "xls"
+    return "csv"
+
+
+def _xlsx_cell_text(value: object) -> str:
+    """把 openpyxl 单元格值统一转成文本，供表头匹配与行校验复用。"""
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def parse_xlsx(
+    content: bytes,
+    *,
+    tzinfo: ZoneInfo,
+    default_source: Source = Source.ALIPAY,
+    explicit_source: Source | None = None,
+) -> ParseResult:
+    encoding = "xlsx"
+    workbook = None
+    try:
+        from openpyxl import load_workbook
+
+        workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        sheet = workbook.active
+        if sheet is None:
+            raise ValueError("工作簿没有可用工作表")
+        rows: list[tuple[str, ...]] = []
+        truncated = False
+        for index, row in enumerate(sheet.iter_rows(values_only=True)):
+            if index >= MAX_XLSX_ROWS:
+                truncated = True
+                break
+            rows.append(tuple(_xlsx_cell_text(cell) for cell in row))
+    except Exception:  # 坏 xlsx（损坏/伪造 zip）与坏 CSV 同样只拒识不崩溃
+        return ParseResult(
+            source=explicit_source or default_source,
+            encoding=encoding,
+            rows=(),
+            issues=(
+                ParseIssue(
+                    line_no=1,
+                    status=ImportRowStatus.MISSING_HEADER,
+                    detail="无法解析 XLSX 文件（文件损坏或不是有效工作簿）",
+                    raw="",
+                ),
+            ),
+            skipped_lines=0,
+            header_fields=(),
+            rejected_total=1,
+        )
+    finally:
+        if workbook is not None:
+            workbook.close()
+
+    head = "\n".join(",".join(row) for row in rows[:40])
+    source, warnings = _resolve_source(head, default_source, explicit_source)
+    if truncated:
+        warnings += (f"XLSX 行数超过上限，仅解析前 {MAX_XLSX_ROWS} 行",)
+    return _parse_rows(
+        rows, tzinfo=tzinfo, source=source, encoding=encoding, warnings=warnings
+    )
+
+
+def parse_bill(
+    content: bytes,
+    *,
+    tzinfo: ZoneInfo,
+    default_source: Source = Source.ALIPAY,
+    explicit_source: Source | None = None,
+) -> ParseResult:
+    """按文件内容自动分发：xlsx 走 openpyxl，csv 走文本解码，无需看扩展名。"""
+    fmt = detect_format(content)
+    if fmt == "xlsx":
+        return parse_xlsx(
+            content,
+            tzinfo=tzinfo,
+            default_source=default_source,
+            explicit_source=explicit_source,
+        )
+    if fmt == "xls":
+        return ParseResult(
+            source=explicit_source or default_source,
+            encoding="xls",
+            rows=(),
+            issues=(
+                ParseIssue(
+                    line_no=1,
+                    status=ImportRowStatus.MISSING_HEADER,
+                    detail="不支持旧版 .xls 账单，请另存为 .xlsx 或 .csv 后重试",
+                    raw="",
+                ),
+            ),
+            skipped_lines=0,
+            header_fields=(),
+            rejected_total=1,
+        )
+    return parse_csv(
+        content,
+        tzinfo=tzinfo,
+        default_source=default_source,
+        explicit_source=explicit_source,
     )

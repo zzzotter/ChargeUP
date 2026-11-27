@@ -5,9 +5,9 @@ import { ButtonLink, Card, Chip, PageHeader } from "@/components/ui";
 const ENTRIES = [
   {
     icon: Upload,
-    title: "导入 CSV 账单",
-    description: "支付宝 / 微信官方导出的 CSV，自动跳过表头、清洗乱码并幂等去重。",
-    chips: ["支付宝 24 行表头", "微信 16 行", "GBK", "1000 条内 ≤3s"],
+    title: "导入账单文件",
+    description: "支付宝 CSV / 微信 XLSX 官方导出文件，自动跳过表头、清洗乱码并幂等去重。",
+    chips: ["支付宝 24 行表头", "微信 16 行", "CSV / XLSX", "GBK", "1000 条内 ≤3s"],
     href: null,
     day: "第 6 天",
   },
