@@ -1,0 +1,2355 @@
+# ledger-guard OpenAPI 草案（第 5 天交付）
+# 由 FastAPI 应用自动导出（app.main:app -> app.openapi()），与后端实现同源。
+# 重新生成：在 backend 目录执行
+#   python -c "import yaml; from app.main import app; s = app.openapi(); s['servers'] = [{'url': 'http://127.0.0.1:8000', 'description': '本地开发'}]; open('../api/openapi.yaml', 'w', encoding='utf-8').write(yaml.safe_dump(s, allow_unicode=True, sort_keys=False, width=120))"
+openapi: 3.1.0
+info:
+  title: ledger-guard API
+  description: 'ledger-guard 智能记账与消费干预系统 —— 后端 API（P0 + 设置，对齐前端《页面清单》§7 契约）。
+
+
+    约定：
+
+    - 前缀 `/api/v1`，请求/响应字段一律 lowerCamelCase。
+
+    - 金额一律整数「分」，字段名 `amount` / `totalExpense` 等；不接受浮点金额。
+
+    - 时间 ISO 8601 带时区偏移（如 `2026-11-24T18:20:11+08:00`）。
+
+    - 分页 `page` 从 1 开始，`pageSize` 默认 20（上限 100），响应 `{items,page,pageSize,total}`。
+
+    - 排序 `sort=occurredAt,-amount`（前缀 `-` 表示降序）。
+
+    - 财务记录只做软删除：`DELETE` 仅写 `deletedAt` 并返回 204；硬删除一律 405 `HARD_DELETE_FORBIDDEN`。
+
+    - 错误统一 `{code, message, details}`；重复资源 409 `DUPLICATE_RESOURCE`，参数校验 422 `VALIDATION_ERROR`。
+
+    - 设置环境变量 `API_TOKEN` 后，除 `/health*` 外的接口都需要 `Authorization: Bearer <token>`。'
+  version: 0.1.0
+paths:
+  /api/v1/health:
+    get:
+      tags:
+      - 系统
+      summary: 存活检查
+      operationId: health_api_v1_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Health Api V1 Health Get
+  /api/v1/health/ready:
+    get:
+      tags:
+      - 系统
+      summary: 就绪检查（数据库连通性 + 迁移版本 + 关键表可读）
+      operationId: ready_api_v1_health_ready_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/transactions/inbox:
+    get:
+      tags:
+      - 交易
+      summary: 待分类收件箱
+      operationId: list_inbox_api_v1_transactions_inbox_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: pageSize
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Pagesize
+      - name: sort
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 如 -occurredAt
+          title: Sort
+        description: 如 -occurredAt
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_TransactionRead_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/transactions/batch-classify:
+    post:
+      tags:
+      - 交易
+      summary: 批量归类（可选同时沉淀关键词规则）
+      operationId: batch_classify_api_v1_transactions_batch_classify_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchClassifyRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchClassifyRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+  /api/v1/transactions/reclassify:
+    post:
+      tags:
+      - 交易
+      summary: 重跑分类规则
+      operationId: reclassify_api_v1_transactions_reclassify_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/ReclassifyRequest'
+              - type: 'null'
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReclassifyResultRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+  /api/v1/transactions/duplicates/check:
+    post:
+      tags:
+      - 交易
+      summary: 弱指纹查重（同日同额）
+      operationId: check_duplicates_api_v1_transactions_duplicates_check_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DuplicateProbeList'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuspectedDuplicateList'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+  /api/v1/transactions:
+    get:
+      tags:
+      - 交易
+      summary: 账本分页列表
+      operationId: list_transactions_api_v1_transactions_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: month
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          description: YYYY-MM
+          title: Month
+        description: YYYY-MM
+      - name: source
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: ALIPAY/WECHAT/SCREENSHOT/MANUAL；ALL=不限
+          title: Source
+        description: ALIPAY/WECHAT/SCREENSHOT/MANUAL；ALL=不限
+      - name: categoryId
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 分类 id；ALL=不限，NONE=未分类
+          title: Categoryid
+        description: 分类 id；ALL=不限，NONE=未分类
+      - name: direction
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/Direction'
+          - type: 'null'
+          title: Direction
+      - name: q
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          description: 商户/备注模糊匹配
+          title: Q
+        description: 商户/备注模糊匹配
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: pageSize
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Pagesize
+      - name: sort
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 如 -occurredAt,-amount
+          title: Sort
+        description: 如 -occurredAt,-amount
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_TransactionRead_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - 交易
+      summary: 新建交易（快捷填写/手动）
+      operationId: create_transaction_api_v1_transactions_post
+      security:
+      - ApiToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionInput'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/transactions/{transaction_id}:
+    get:
+      tags:
+      - 交易
+      summary: 交易详情
+      operationId: get_transaction_api_v1_transactions__transaction_id__get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: transaction_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Transaction Id
+      - name: includeDeleted
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Includedeleted
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - 交易
+      summary: 编辑交易
+      operationId: update_transaction_api_v1_transactions__transaction_id__patch
+      security:
+      - ApiToken: []
+      parameters:
+      - name: transaction_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Transaction Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransactionUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - 交易
+      summary: 软删除（移入回收）
+      description: 只写 deletedAt；hard=true 一律 405 HARD_DELETE_FORBIDDEN。
+      operationId: delete_transaction_api_v1_transactions__transaction_id__delete
+      security:
+      - ApiToken: []
+      parameters:
+      - name: transaction_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Transaction Id
+      - name: hard
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: 预留：硬删除请求一律拒绝
+          default: false
+          title: Hard
+        description: 预留：硬删除请求一律拒绝
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/transactions/{transaction_id}/restore:
+    post:
+      tags:
+      - 交易
+      summary: 从回收恢复
+      operationId: restore_transaction_api_v1_transactions__transaction_id__restore_post
+      security:
+      - ApiToken: []
+      parameters:
+      - name: transaction_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Transaction Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/categories:
+    get:
+      tags:
+      - 分类
+      summary: 分类列表
+      operationId: list_categories_api_v1_categories_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/CategoryType'
+          - type: 'null'
+          title: Type
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryRead'
+                title: Response List Categories Api V1 Categories Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - 分类
+      summary: 新建分类
+      operationId: create_category_api_v1_categories_post
+      security:
+      - ApiToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryCreateRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/categories/suggest:
+    get:
+      tags:
+      - 分类
+      summary: 分类建议（快捷填写实时调用）
+      operationId: suggest_category_api_v1_categories_suggest_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: name
+        in: query
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 255
+          title: Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategorySuggestRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/categories/{category_id}:
+    patch:
+      tags:
+      - 分类
+      summary: 修改分类（改名/改色/停用）
+      operationId: update_category_api_v1_categories__category_id__patch
+      security:
+      - ApiToken: []
+      parameters:
+      - name: category_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Category Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CategoryUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - 分类
+      summary: 删除分类（被交易引用时 409）
+      operationId: delete_category_api_v1_categories__category_id__delete
+      security:
+      - ApiToken: []
+      parameters:
+      - name: category_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Category Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/category-rules:
+    get:
+      tags:
+      - 分类规则
+      summary: 规则列表（用户规则优先）
+      operationId: list_rules_api_v1_category_rules_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/RuleRead'
+                type: array
+                title: Response List Rules Api V1 Category Rules Get
+      security:
+      - ApiToken: []
+    post:
+      tags:
+      - 分类规则
+      summary: 新增用户规则
+      operationId: create_rule_api_v1_category_rules_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuleCreateRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuleRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+  /api/v1/category-rules/test:
+    post:
+      tags:
+      - 分类规则
+      summary: 规则干跑测试（不写库）
+      operationId: test_rule_api_v1_category_rules_test_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RuleTestRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RuleTestRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+  /api/v1/category-rules/{rule_id}:
+    delete:
+      tags:
+      - 分类规则
+      summary: 删除用户规则（内置规则只读，409）
+      operationId: delete_rule_api_v1_category_rules__rule_id__delete
+      security:
+      - ApiToken: []
+      parameters:
+      - name: rule_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Rule Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/imports/csv:
+    post:
+      tags:
+      - 导入
+      summary: 导入微信/支付宝账单（CSV / XLSX）
+      operationId: import_bill_api_v1_imports_csv_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_import_bill_api_v1_imports_csv_post'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportReportRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+  /api/v1/imports/screenshot-candidates:
+    post:
+      tags:
+      - 导入
+      summary: 截图候选批量入账（source=SCREENSHOT）
+      operationId: screenshot_candidates_api_v1_imports_screenshot_candidates_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScreenshotCandidatesRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenshotCandidatesRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+  /api/v1/imports:
+    get:
+      tags:
+      - 导入
+      summary: 导入历史
+      operationId: list_imports_api_v1_imports_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: pageSize
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Pagesize
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_ImportRecordRead_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/imports/{import_id}/report:
+    get:
+      tags:
+      - 导入
+      summary: 导入报告详情
+      operationId: import_report_api_v1_imports__import_id__report_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: import_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Import Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportReportRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/stats/summary:
+    get:
+      tags:
+      - 统计
+      summary: 仪表盘概要
+      operationId: summary_api_v1_stats_summary_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: month
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          description: YYYY-MM，默认当月
+          title: Month
+        description: YYYY-MM，默认当月
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsSummaryRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/stats/monthly:
+    get:
+      tags:
+      - 统计
+      summary: 月度趋势
+      operationId: monthly_trend_api_v1_stats_monthly_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: months
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 24
+          minimum: 1
+          default: 6
+          title: Months
+      - name: month
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          description: 趋势截止月份，默认当月
+          title: Month
+        description: 趋势截止月份，默认当月
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MonthlyTrendPointRead'
+                title: Response Monthly Trend Api V1 Stats Monthly Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/stats/categories:
+    get:
+      tags:
+      - 统计
+      summary: 分类分布
+      operationId: category_stats_api_v1_stats_categories_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: month
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          title: Month
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryStatRead'
+                title: Response Category Stats Api V1 Stats Categories Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/budget:
+    get:
+      tags:
+      - 预算
+      summary: 读取预算与阈值（未设置返回默认值）
+      operationId: get_budget_api_v1_budget_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: month
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          description: YYYY-MM，默认当月
+          title: Month
+        description: YYYY-MM，默认当月
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - 预算
+      summary: 保存预算与双阈值（warn < alert）
+      operationId: upsert_budget_api_v1_budget_put
+      security:
+      - ApiToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BudgetUpsertRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/alerts:
+    get:
+      tags:
+      - 预警
+      summary: 预警事件流
+      operationId: list_alerts_api_v1_alerts_get
+      security:
+      - ApiToken: []
+      parameters:
+      - name: level
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/AlertLevel'
+          - type: 'null'
+          title: Level
+      - name: period
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          title: Period
+      - name: month
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          description: 前端按 month 过滤，等价 period
+          title: Month
+        description: 前端按 month 过滤，等价 period
+      - name: read
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Read
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: pageSize
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Pagesize
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_AlertEventRead_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/alerts/{alert_id}:
+    patch:
+      tags:
+      - 预警
+      summary: 标记预警已读
+      operationId: patch_alert_api_v1_alerts__alert_id__patch
+      security:
+      - ApiToken: []
+      parameters:
+      - name: alert_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Alert Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertPatchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertEventRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/settings:
+    get:
+      tags:
+      - 设置
+      summary: 读取设置
+      operationId: get_settings_api_v1_settings_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsRead'
+      security:
+      - ApiToken: []
+    patch:
+      tags:
+      - 设置
+      summary: 保存设置
+      operationId: update_settings_api_v1_settings_patch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsUpdateRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - ApiToken: []
+components:
+  schemas:
+    AlertEventRead:
+      properties:
+        id:
+          type: string
+          title: Id
+        level:
+          $ref: '#/components/schemas/AlertLevel'
+        period:
+          type: string
+          title: Period
+        threshold:
+          type: number
+          title: Threshold
+        actual:
+          type: integer
+          title: Actual
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+        read:
+          type: boolean
+          title: Read
+        budget:
+          type: integer
+          title: Budget
+      type: object
+      required:
+      - id
+      - level
+      - period
+      - threshold
+      - actual
+      - createdAt
+      - read
+      - budget
+      title: AlertEventRead
+    AlertLevel:
+      type: string
+      enum:
+      - WARN
+      - ALERT
+      title: AlertLevel
+      description: 预算预警级别：warnThreshold 默认 80%，alertThreshold 默认 100%。
+    AlertPatchRequest:
+      properties:
+        read:
+          type: boolean
+          title: Read
+          default: true
+      type: object
+      title: AlertPatchRequest
+    BatchClassifyRead:
+      properties:
+        updated:
+          type: integer
+          title: Updated
+        failed:
+          items:
+            $ref: '#/components/schemas/BatchFailureRead'
+          type: array
+          title: Failed
+        ruleCreated:
+          type: boolean
+          title: Rulecreated
+        rule:
+          anyOf:
+          - $ref: '#/components/schemas/RuleRead'
+          - type: 'null'
+      type: object
+      required:
+      - updated
+      - failed
+      - ruleCreated
+      title: BatchClassifyRead
+    BatchClassifyRequest:
+      properties:
+        ids:
+          items:
+            type: integer
+          type: array
+          maxItems: 500
+          minItems: 1
+          title: Ids
+        categoryId:
+          type: integer
+          title: Categoryid
+        createRule:
+          anyOf:
+          - $ref: '#/components/schemas/BatchRuleInput'
+          - type: 'null'
+      type: object
+      required:
+      - ids
+      - categoryId
+      title: BatchClassifyRequest
+    BatchFailureRead:
+      properties:
+        id:
+          type: string
+          title: Id
+        reason:
+          type: string
+          title: Reason
+      type: object
+      required:
+      - id
+      - reason
+      title: BatchFailureRead
+    BatchRuleInput:
+      properties:
+        keyword:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Keyword
+      type: object
+      required:
+      - keyword
+      title: BatchRuleInput
+    Body_import_bill_api_v1_imports_csv_post:
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
+          description: 微信/支付宝导出的 CSV 或 XLSX 文件
+        source:
+          anyOf:
+          - $ref: '#/components/schemas/Source'
+          - type: 'null'
+          description: 显式指定来源，留空则按内容探测
+      type: object
+      required:
+      - file
+      title: Body_import_bill_api_v1_imports_csv_post
+    BudgetRead:
+      properties:
+        month:
+          type: string
+          title: Month
+        amount:
+          type: integer
+          title: Amount
+        warnThreshold:
+          type: number
+          title: Warnthreshold
+        alertThreshold:
+          type: number
+          title: Alertthreshold
+      type: object
+      required:
+      - month
+      - amount
+      - warnThreshold
+      - alertThreshold
+      title: BudgetRead
+    BudgetUpsertRequest:
+      properties:
+        month:
+          anyOf:
+          - type: string
+            pattern: ^\d{4}-(0[1-9]|1[0-2])$
+          - type: 'null'
+          title: Month
+        amount:
+          type: integer
+          maximum: 1000000000000.0
+          exclusiveMinimum: 0.0
+          title: Amount
+          description: 月度预算（整数分）
+        warnThreshold:
+          anyOf:
+          - type: number
+            maximum: 1.0
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Warnthreshold
+        alertThreshold:
+          anyOf:
+          - type: number
+            maximum: 1.0
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Alertthreshold
+      type: object
+      required:
+      - amount
+      title: BudgetUpsertRequest
+    CategoryCreateRequest:
+      properties:
+        name:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Name
+        type:
+          $ref: '#/components/schemas/CategoryType'
+        color:
+          anyOf:
+          - type: string
+            maxLength: 16
+          - type: 'null'
+          title: Color
+      type: object
+      required:
+      - name
+      - type
+      title: CategoryCreateRequest
+    CategoryRead:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        type:
+          $ref: '#/components/schemas/CategoryType'
+        color:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Color
+        isActive:
+          type: boolean
+          title: Isactive
+        source:
+          type: string
+          title: Source
+          description: BUILTIN=内置分类，USER=自定义分类
+        ruleCount:
+          type: integer
+          title: Rulecount
+        tone:
+          type: string
+          enum:
+          - coral
+          - mint
+          - lilac
+          - clay
+          - default
+          title: Tone
+        isBuiltin:
+          type: boolean
+          title: Isbuiltin
+        transactionCount:
+          type: integer
+          title: Transactioncount
+      type: object
+      required:
+      - id
+      - name
+      - type
+      - color
+      - isActive
+      - source
+      - ruleCount
+      - tone
+      - isBuiltin
+      - transactionCount
+      title: CategoryRead
+    CategorySource:
+      type: string
+      enum:
+      - RULE
+      - BUILTIN
+      - USER
+      title: CategorySource
+      description: 分类来源（前端 §7.3 冻结）：用户手动 > 用户规则 > 内置词库。
+    CategoryStatRead:
+      properties:
+        categoryId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Categoryid
+        name:
+          type: string
+          title: Name
+        amount:
+          type: integer
+          title: Amount
+        ratio:
+          type: number
+          title: Ratio
+      type: object
+      required:
+      - categoryId
+      - name
+      - amount
+      - ratio
+      title: CategoryStatRead
+    CategorySuggestRead:
+      properties:
+        categoryId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Categoryid
+        matchedBy:
+          anyOf:
+          - $ref: '#/components/schemas/CategorySource'
+          - type: 'null'
+        keyword:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Keyword
+        ruleKeyword:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Rulekeyword
+      type: object
+      required:
+      - categoryId
+      - matchedBy
+      - keyword
+      - ruleKeyword
+      title: CategorySuggestRead
+    CategoryType:
+      type: string
+      enum:
+      - INCOME
+      - EXPENSE
+      title: CategoryType
+    CategoryUpdateRequest:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            maxLength: 64
+            minLength: 1
+          - type: 'null'
+          title: Name
+        color:
+          anyOf:
+          - type: string
+            maxLength: 16
+          - type: 'null'
+          title: Color
+        isActive:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Isactive
+      type: object
+      title: CategoryUpdateRequest
+    Direction:
+      type: string
+      enum:
+      - INCOME
+      - EXPENSE
+      - TRANSFER
+      title: Direction
+      description: 资金流向。TRANSFER（转账/不计收支）必须被统计排除。
+    DuplicateProbeList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/DuplicateProbeRequest'
+          type: array
+          maxItems: 200
+          minItems: 1
+          title: Items
+      type: object
+      required:
+      - items
+      title: DuplicateProbeList
+    DuplicateProbeRequest:
+      properties:
+        merchant:
+          type: string
+          maxLength: 255
+          title: Merchant
+          default: ''
+        amount:
+          type: integer
+          maximum: 1000000000000.0
+          exclusiveMinimum: 0.0
+          title: Amount
+        occurredAt:
+          type: string
+          format: date-time
+          title: Occurredat
+      type: object
+      required:
+      - amount
+      - occurredAt
+      title: DuplicateProbeRequest
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ImportFailureRead:
+      properties:
+        rowNumber:
+          type: integer
+          title: Rownumber
+        reason:
+          type: string
+          title: Reason
+        raw:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Raw
+      type: object
+      required:
+      - rowNumber
+      - reason
+      title: ImportFailureRead
+    ImportRecordRead:
+      properties:
+        id:
+          type: string
+          title: Id
+        filename:
+          type: string
+          title: Filename
+        source:
+          $ref: '#/components/schemas/Source'
+        recognized:
+          type: integer
+          title: Recognized
+        skippedHeaderRows:
+          type: integer
+          title: Skippedheaderrows
+        duplicated:
+          type: integer
+          title: Duplicated
+        failed:
+          type: integer
+          title: Failed
+        created:
+          type: integer
+          title: Created
+        durationMs:
+          type: integer
+          title: Durationms
+        createdAt:
+          type: string
+          format: date-time
+          title: Createdat
+      type: object
+      required:
+      - id
+      - filename
+      - source
+      - recognized
+      - skippedHeaderRows
+      - duplicated
+      - failed
+      - created
+      - durationMs
+      - createdAt
+      title: ImportRecordRead
+    ImportReportRead:
+      properties:
+        importId:
+          type: string
+          title: Importid
+        recognized:
+          type: integer
+          title: Recognized
+        skippedHeaderRows:
+          type: integer
+          title: Skippedheaderrows
+        duplicated:
+          type: integer
+          title: Duplicated
+        failed:
+          type: integer
+          title: Failed
+        created:
+          type: integer
+          title: Created
+        failures:
+          items:
+            $ref: '#/components/schemas/ImportFailureRead'
+          type: array
+          title: Failures
+        durationMs:
+          type: integer
+          title: Durationms
+      type: object
+      required:
+      - importId
+      - recognized
+      - skippedHeaderRows
+      - duplicated
+      - failed
+      - created
+      - failures
+      - durationMs
+      title: ImportReportRead
+    ModulesRead:
+      properties:
+        wardrobe:
+          type: boolean
+          title: Wardrobe
+        intents:
+          type: boolean
+          title: Intents
+        feedback:
+          type: boolean
+          title: Feedback
+      type: object
+      required:
+      - wardrobe
+      - intents
+      - feedback
+      title: ModulesRead
+    ModulesUpdate:
+      properties:
+        wardrobe:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Wardrobe
+        intents:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Intents
+        feedback:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Feedback
+      type: object
+      title: ModulesUpdate
+    MonthlyTrendPointRead:
+      properties:
+        month:
+          type: string
+          title: Month
+        expense:
+          type: integer
+          title: Expense
+      type: object
+      required:
+      - month
+      - expense
+      title: MonthlyTrendPointRead
+    Page_AlertEventRead_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/AlertEventRead'
+          type: array
+          title: Items
+        page:
+          type: integer
+          title: Page
+        pageSize:
+          type: integer
+          title: Pagesize
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - page
+      - pageSize
+      - total
+      title: Page[AlertEventRead]
+    Page_ImportRecordRead_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ImportRecordRead'
+          type: array
+          title: Items
+        page:
+          type: integer
+          title: Page
+        pageSize:
+          type: integer
+          title: Pagesize
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - page
+      - pageSize
+      - total
+      title: Page[ImportRecordRead]
+    Page_TransactionRead_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/TransactionRead'
+          type: array
+          title: Items
+        page:
+          type: integer
+          title: Page
+        pageSize:
+          type: integer
+          title: Pagesize
+        total:
+          type: integer
+          title: Total
+      type: object
+      required:
+      - items
+      - page
+      - pageSize
+      - total
+      title: Page[TransactionRead]
+    Persona:
+      type: string
+      enum:
+      - DIRECT
+      - GENTLE
+      - RATIONAL
+      title: Persona
+      description: AI 劝动人设（P2 使用，设置页先持久化）。
+    ReclassifyRequest:
+      properties:
+        transactionIds:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+            maxItems: 500
+          - type: 'null'
+          title: Transactionids
+      type: object
+      title: ReclassifyRequest
+    ReclassifyResultRead:
+      properties:
+        scanned:
+          type: integer
+          title: Scanned
+        updated:
+          type: integer
+          title: Updated
+        total:
+          type: integer
+          title: Total
+        remaining:
+          type: integer
+          title: Remaining
+        truncated:
+          type: boolean
+          title: Truncated
+        invalidIds:
+          items:
+            type: string
+          type: array
+          title: Invalidids
+      type: object
+      required:
+      - scanned
+      - updated
+      - total
+      - remaining
+      - truncated
+      - invalidIds
+      title: ReclassifyResultRead
+    RuleCreateRequest:
+      properties:
+        keyword:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Keyword
+        categoryId:
+          type: integer
+          title: Categoryid
+        priority:
+          type: integer
+          title: Priority
+          default: 0
+      type: object
+      required:
+      - keyword
+      - categoryId
+      title: RuleCreateRequest
+    RuleRead:
+      properties:
+        id:
+          type: string
+          title: Id
+        keyword:
+          type: string
+          title: Keyword
+        categoryId:
+          type: string
+          title: Categoryid
+        isBuiltin:
+          type: boolean
+          title: Isbuiltin
+        priority:
+          type: integer
+          title: Priority
+        source:
+          type: string
+          enum:
+          - USER
+          - BUILTIN
+          title: Source
+      type: object
+      required:
+      - id
+      - keyword
+      - categoryId
+      - isBuiltin
+      - priority
+      - source
+      title: RuleRead
+    RuleTestRead:
+      properties:
+        matched:
+          type: boolean
+          title: Matched
+        categoryId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Categoryid
+        categoryName:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Categoryname
+        ruleId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ruleid
+        ruleKeyword:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Rulekeyword
+        ruleSource:
+          anyOf:
+          - $ref: '#/components/schemas/CategorySource'
+          - type: 'null'
+        matchedBy:
+          anyOf:
+          - type: string
+            enum:
+            - RULE
+            - BUILTIN
+          - type: 'null'
+          title: Matchedby
+        keyword:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Keyword
+        source:
+          anyOf:
+          - type: string
+            enum:
+            - USER
+            - BUILTIN
+          - type: 'null'
+          title: Source
+      type: object
+      required:
+      - matched
+      title: RuleTestRead
+    RuleTestRequest:
+      properties:
+        name:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Name
+      type: object
+      required:
+      - name
+      title: RuleTestRequest
+    ScreenshotCandidatesRead:
+      properties:
+        created:
+          type: integer
+          title: Created
+        skipped:
+          type: integer
+          title: Skipped
+        failed:
+          type: integer
+          title: Failed
+        failures:
+          items:
+            $ref: '#/components/schemas/ScreenshotFailureRead'
+          type: array
+          title: Failures
+      type: object
+      required:
+      - created
+      - skipped
+      - failed
+      - failures
+      title: ScreenshotCandidatesRead
+    ScreenshotCandidatesRequest:
+      properties:
+        rows:
+          items:
+            $ref: '#/components/schemas/ScreenshotRowInput'
+          type: array
+          maxItems: 200
+          title: Rows
+        skippedClientIds:
+          items:
+            type: string
+          type: array
+          maxItems: 200
+          title: Skippedclientids
+      type: object
+      title: ScreenshotCandidatesRequest
+    ScreenshotFailureRead:
+      properties:
+        clientId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Clientid
+        reason:
+          type: string
+          title: Reason
+      type: object
+      required:
+      - clientId
+      - reason
+      title: ScreenshotFailureRead
+    ScreenshotRowInput:
+      properties:
+        clientId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Clientid
+        merchant:
+          type: string
+          maxLength: 255
+          title: Merchant
+          default: ''
+        amount:
+          type: integer
+          maximum: 1000000000000.0
+          exclusiveMinimum: 0.0
+          title: Amount
+        direction:
+          type: string
+          enum:
+          - EXPENSE
+          - INCOME
+          title: Direction
+          default: EXPENSE
+        occurredAt:
+          type: string
+          format: date-time
+          title: Occurredat
+        categoryId:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Categoryid
+        note:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Note
+      type: object
+      required:
+      - amount
+      - occurredAt
+      title: ScreenshotRowInput
+    SettingsRead:
+      properties:
+        hourlyRate:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Hourlyrate
+        persona:
+          $ref: '#/components/schemas/Persona'
+        modules:
+          $ref: '#/components/schemas/ModulesRead'
+      type: object
+      required:
+      - hourlyRate
+      - persona
+      - modules
+      title: SettingsRead
+    SettingsUpdateRequest:
+      properties:
+        hourlyRate:
+          anyOf:
+          - type: integer
+            maximum: 1000000000000.0
+            minimum: 0.0
+          - type: 'null'
+          title: Hourlyrate
+        persona:
+          anyOf:
+          - $ref: '#/components/schemas/Persona'
+          - type: 'null'
+        modules:
+          anyOf:
+          - $ref: '#/components/schemas/ModulesUpdate'
+          - type: 'null'
+      type: object
+      title: SettingsUpdateRequest
+    Source:
+      type: string
+      enum:
+      - ALIPAY
+      - WECHAT
+      - SCREENSHOT
+      - MANUAL
+      title: Source
+      description: 账单来源。
+    StatsSummaryRead:
+      properties:
+        month:
+          type: string
+          title: Month
+        totalExpense:
+          type: integer
+          title: Totalexpense
+        totalIncome:
+          type: integer
+          title: Totalincome
+        excludedRefundCount:
+          type: integer
+          title: Excludedrefundcount
+        excludedTransferCount:
+          type: integer
+          title: Excludedtransfercount
+        uncategorizedCount:
+          type: integer
+          title: Uncategorizedcount
+        uncategorized:
+          type: integer
+          title: Uncategorized
+        duplicate:
+          type: integer
+          title: Duplicate
+      type: object
+      required:
+      - month
+      - totalExpense
+      - totalIncome
+      - excludedRefundCount
+      - excludedTransferCount
+      - uncategorizedCount
+      - uncategorized
+      - duplicate
+      title: StatsSummaryRead
+    SuspectedDuplicateList:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/SuspectedDuplicateRead'
+          type: array
+          title: Items
+      type: object
+      required:
+      - items
+      title: SuspectedDuplicateList
+    SuspectedDuplicateRead:
+      properties:
+        transactionId:
+          type: string
+          title: Transactionid
+        merchant:
+          type: string
+          title: Merchant
+        amount:
+          type: integer
+          title: Amount
+        occurredAt:
+          type: string
+          format: date-time
+          title: Occurredat
+        externalId:
+          type: string
+          title: Externalid
+        confidence:
+          type: string
+          title: Confidence
+      type: object
+      required:
+      - transactionId
+      - merchant
+      - amount
+      - occurredAt
+      - externalId
+      - confidence
+      title: SuspectedDuplicateRead
+    TransactionInput:
+      properties:
+        merchant:
+          type: string
+          maxLength: 255
+          minLength: 1
+          title: Merchant
+        amount:
+          type: integer
+          maximum: 1000000000000.0
+          exclusiveMinimum: 0.0
+          title: Amount
+          description: 金额（整数分）
+        direction:
+          type: string
+          enum:
+          - EXPENSE
+          - INCOME
+          title: Direction
+        occurredAt:
+          type: string
+          format: date-time
+          title: Occurredat
+        categoryId:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Categoryid
+        note:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Note
+      type: object
+      required:
+      - merchant
+      - amount
+      - direction
+      - occurredAt
+      title: TransactionInput
+    TransactionRead:
+      properties:
+        id:
+          type: string
+          title: Id
+        source:
+          $ref: '#/components/schemas/Source'
+        externalId:
+          type: string
+          title: Externalid
+        merchant:
+          type: string
+          title: Merchant
+        amount:
+          type: integer
+          title: Amount
+          description: 金额（整数分）
+        direction:
+          $ref: '#/components/schemas/Direction'
+        categoryId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Categoryid
+        occurredAt:
+          type: string
+          format: date-time
+          title: Occurredat
+        note:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Note
+        refundOfTransactionId:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Refundoftransactionid
+        categorySource:
+          anyOf:
+          - $ref: '#/components/schemas/CategorySource'
+          - type: 'null'
+        deletedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Deletedat
+        status:
+          type: string
+          enum:
+          - classified
+          - uncategorized
+          - refund
+          - duplicate
+          title: Status
+        updatedAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Updatedat
+      type: object
+      required:
+      - id
+      - source
+      - externalId
+      - merchant
+      - amount
+      - direction
+      - categoryId
+      - occurredAt
+      - note
+      - refundOfTransactionId
+      - categorySource
+      - deletedAt
+      - status
+      - updatedAt
+      title: TransactionRead
+    TransactionUpdateRequest:
+      properties:
+        merchant:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Merchant
+        amount:
+          anyOf:
+          - type: integer
+            maximum: 1000000000000.0
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Amount
+        direction:
+          anyOf:
+          - $ref: '#/components/schemas/Direction'
+          - type: 'null'
+        occurredAt:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Occurredat
+        note:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Note
+        categoryId:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Categoryid
+          description: 显式传 null 等价于清空分类
+        clearCategory:
+          type: boolean
+          title: Clearcategory
+          default: false
+        recategorize:
+          type: boolean
+          title: Recategorize
+          default: false
+      type: object
+      title: TransactionUpdateRequest
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+  securitySchemes:
+    ApiToken:
+      type: http
+      description: '在 .env 设置 API_TOKEN 后，携带 Authorization: Bearer <token>'
+      scheme: bearer
+tags:
+- name: 交易
+  description: 账本分页、详情、编辑、软删除/恢复、批量归类
+- name: 分类
+  description: 分类 CRUD、分类建议与来源标注
+- name: 分类规则
+  description: 关键词规则 CRUD 与干跑测试
+- name: 导入
+  description: CSV 导入、截图候选入账、导入历史与报告
+- name: 统计
+  description: 仪表盘概要、月度趋势与分类分布
+- name: 预算
+  description: 月度预算与 warn/alert 双阈值
+- name: 预警
+  description: 预警事件流与已读标记
+- name: 设置
+  description: 时薪、人设与模块开关
+- name: 系统
+  description: 健康检查（免鉴权）
+servers:
+- url: http://127.0.0.1:8000
+  description: 本地开发（uvicorn 默认端口）

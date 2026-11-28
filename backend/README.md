@@ -11,7 +11,7 @@
 | 2 | 初始化 FastAPI、数据库连接与迁移 | `app/main.py`、`app/infrastructure/db.py`、`alembic/` |
 | 3 | 交易/分类/规则模型；整数分、软删除 | `app/infrastructure/models.py`、`alembic/versions/0001_*` |
 | 4 | 快捷录入与交易列表 API | `POST /transactions`、`GET /transactions` |
-| 5 | 交易 API 完成 + OpenAPI 草案 | `PATCH/DELETE /transactions/{id}`、自动生成的 Swagger |
+| 5 | 交易 API 完成 + OpenAPI 草案 | `PATCH/DELETE /transactions/{id}`、自动生成的 Swagger、静态草案 `../api/openapi.yaml` |
 | 6 | 导入写入、幂等去重 | `POST /imports/csv`、`(source, external_id)` 唯一约束 |
 | 7 | 分类规则匹配、待分类收件箱 | `app/domain/services/categorization.py`、`GET /transactions/inbox` |
 | 8 | 退款关联与转账排除 | `app/domain/services/refunds.py`、统计口径 |
@@ -57,7 +57,8 @@ alembic upgrade head
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- OpenAPI 文档：<http://localhost:8000/docs>
+- OpenAPI 文档：<http://localhost:8000/docs>；不启动服务也能看的静态草案：`../api/openapi.yaml`（第 5 天交付）
+- 静态草案由 `app.openapi()` 导出，接口改动后需重新生成（文件头有命令）
 - 健康检查：`GET /api/v1/health`、`GET /api/v1/health/ready`（均免鉴权）
 
 > 本地 Python 3.14 无 `psycopg` 预编译包时，测试可直接用 SQLite 内存库跑通（见 `tests/conftest.py`）。

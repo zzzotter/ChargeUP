@@ -6,6 +6,7 @@
 ChargeUP/
 ├─ web/       Next.js 16 前端（页面、组件、API 客户端）
 ├─ backend/   FastAPI 后端（六边形架构，P0 核心记账）
+├─ api/       OpenAPI 契约草案（第 5 天交付，前后端对接基准）
 └─ docs/      页面清单、用户流程、线框等交付文档
 ```
 
@@ -27,7 +28,7 @@ alembic upgrade head        # 或本地临时设 CREATE_SCHEMA_ON_STARTUP=true
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- OpenAPI：<http://localhost:8000/docs>（配置 `API_TOKEN` 后默认关闭）
+- OpenAPI：<http://localhost:8000/docs>（配置 `API_TOKEN` 后默认关闭）；不启动服务也能看的静态草案见 `api/openapi.yaml`
 - 健康检查：`GET /api/v1/health`
 - 测试：`pytest`、`python scripts/check_domain_purity.py`
 - 接口前缀 `/api/v1`，字段 lowerCamelCase，金额为整数「分」，与 `web/lib/api/types.ts` 契约一致。
