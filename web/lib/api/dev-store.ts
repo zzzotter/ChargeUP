@@ -13,6 +13,11 @@ import type {
   CategoryTone,
   CategoryType,
   CategoryWithCount,
+  CsvPreview,
+  ImportCommitRow,
+  ImportRecord,
+  ImportResult,
+  ImportSource,
   InboxResult,
   LedgerFilters,
   MonthSummary,
@@ -194,7 +199,7 @@ export function summarizeMonth(month: string): MonthSummary {
           : undefined;
         if (!original) acc.totalIncome += tx.amount;
       }
-      if (tx.categoryId === null) acc.uncategorized += 1;
+      if (tx.categoryId === null && tx.direction !== "TRANSFER") acc.uncategorized += 1;
       if (tx.status === "duplicate") acc.duplicate += 1;
       return acc;
     },
@@ -260,6 +265,7 @@ export function insertTransaction(input: NewTransactionInput): Transaction {
     direction: input.direction,
     status: input.categoryId ? "classified" : "uncategorized",
     note: input.note?.trim() ? input.note.trim() : undefined,
+    externalId: null,
     refundOfTransactionId: null,
     deletedAt: null,
     updatedAt: null,
@@ -511,9 +517,10 @@ export function markAlertRead(id: string): AlertEvent {
 /* ------------------------------------------------------------------ 收件箱 */
 
 export function listInbox(): InboxResult {
-  const items = DB.filter((tx) => tx.categoryId === null && !tx.deletedAt).sort((a, b) =>
-    b.occurredAt.localeCompare(a.occurredAt),
-  );
+  const items = DB.filter(
+    // 转账没有消费分类，不进收件箱
+    (tx) => tx.categoryId === null && tx.direction !== "TRANSFER" && !tx.deletedAt,
+  ).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   return { items, total: items.length };
 }
 
@@ -551,4 +558,124 @@ export function batchClassify(input: BatchClassifyInput): BatchClassifyResult {
 /** 分类建议：用户规则优先于内置词库 */
 export function suggestFor(merchant: string): RuleTestResult {
   return testRule(merchant);
+}
+
+/* ------------------------------------------------------------------ 账单导入（CSV） */
+
+const IMPORTS: ImportRecord[] = [];
+
+function hasExternal(source: ImportSource, externalId: string | null | undefined): boolean {
+  if (!externalId) return false;
+  return DB.some((tx) => !tx.deletedAt && tx.source === source && tx.externalId === externalId);
+}
+
+/** 幂等去重：库内已存在（来源 + 交易单号）或本文件内重复 → 标记为 duplicate */
+export function annotateCsvPreview(preview: CsvPreview): CsvPreview {
+  const seen = new Set<string>();
+
+  const rows = preview.rows.map((row) => {
+    if (row.status === "failed" || !row.externalId) return row;
+    const key = `${preview.source ?? "UNKNOWN"}:${row.externalId}`;
+
+    if (preview.source && hasExternal(preview.source, row.externalId)) {
+      return { ...row, status: "duplicate" as const, reason: "库中已存在（来源 + 交易单号）" };
+    }
+    if (seen.has(key)) {
+      return { ...row, status: "duplicate" as const, reason: "与本文件前面的行单号重复" };
+    }
+    seen.add(key);
+    return row;
+  });
+
+  return {
+    ...preview,
+    rows,
+    newCount: rows.filter((row) => row.status === "new").length,
+    duplicated: rows.filter((row) => row.status === "duplicate").length,
+    failed: rows.filter((row) => row.status === "failed").length,
+  };
+}
+
+/** 退款自动关联：金额相同、7 天内、商户名含「退款」的收入行（§F-P0-03） */
+function linkRefunds(created: Transaction[]) {
+  for (const tx of created) {
+    if (tx.direction !== "INCOME" || !tx.merchant.includes("退款")) continue;
+    const target = DB.find(
+      (other) =>
+        other.id !== tx.id &&
+        other.direction === "EXPENSE" &&
+        other.amount === tx.amount &&
+        !other.refundOfTransactionId &&
+        !other.deletedAt &&
+        // 已被其他退款关联过的原始交易不再重复关联
+        !DB.some((refund) => refund.refundOfTransactionId === other.id && !refund.deletedAt) &&
+        Math.abs(Date.parse(other.occurredAt) - Date.parse(tx.occurredAt)) <= 7 * 24 * 60 * 60 * 1000,
+    );
+    if (target) tx.refundOfTransactionId = target.id;
+  }
+}
+
+/** 确认入账：只写 new 行，命中规则的自动分类，未命中进收件箱 */
+export function commitCsvImport(input: {
+  fileName: string;
+  source: ImportSource;
+  rows: ImportCommitRow[];
+  failed?: number;
+  /** 预览阶段已判定为重复的行数，合并进导入记录 */
+  duplicated?: number;
+}): ImportResult {
+  if (!input.fileName) throw new StoreError(422, "VALIDATION_ERROR", "缺少文件名");
+  if (input.source !== "ALIPAY" && input.source !== "WECHAT") {
+    throw new StoreError(422, "VALIDATION_ERROR", "来源必须是 ALIPAY 或 WECHAT");
+  }
+  if (!Array.isArray(input.rows)) {
+    throw new StoreError(422, "VALIDATION_ERROR", "rows 必须是数组");
+  }
+
+  const created: Transaction[] = [];
+  let duplicated = input.duplicated ?? 0;
+  const base = Date.now();
+
+  input.rows.forEach((row, index) => {
+    if (hasExternal(input.source, row.externalId)) {
+      duplicated += 1;
+      return;
+    }
+    const suggestion = testRule(row.merchant);
+    const tx: Transaction = {
+      id: `i${base}-${index}`,
+      occurredAt: row.occurredAt,
+      merchant: row.merchant,
+      categoryId: suggestion.categoryId,
+      source: input.source,
+      amount: row.amount,
+      direction: row.direction,
+      status: suggestion.categoryId ? "classified" : "uncategorized",
+      note: row.note ?? undefined,
+      externalId: row.externalId,
+      refundOfTransactionId: null,
+      deletedAt: null,
+      updatedAt: null,
+    };
+    DB.push(tx);
+    created.push(tx);
+  });
+
+  linkRefunds(created);
+
+  const record: ImportResult = {
+    importId: `imp${base}`,
+    fileName: input.fileName,
+    source: input.source,
+    created: created.length,
+    duplicated,
+    failed: input.failed ?? 0,
+    createdAt: new Date().toISOString(),
+  };
+  IMPORTS.unshift(record);
+  return record;
+}
+
+export function listImports(): ImportRecord[] {
+  return IMPORTS.slice(0, 20);
 }

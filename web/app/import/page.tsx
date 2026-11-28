@@ -1,23 +1,26 @@
 import { Image as ImageIcon, PenLine, Upload } from "lucide-react";
 
+import { ImportHistory } from "@/components/import/import-history";
 import { ButtonLink, Card, Chip, PageHeader } from "@/components/ui";
 
 const ENTRIES = [
   {
     icon: Upload,
     title: "导入账单文件",
-    description: "支付宝 CSV / 微信 XLSX 官方导出文件，自动跳过表头、清洗乱码并幂等去重。",
-    chips: ["支付宝 24 行表头", "微信 16 行", "CSV / XLSX", "GBK", "1000 条内 ≤3s"],
-    href: null,
-    day: "第 6 天",
+    description: "支付宝 / 微信导出的 CSV，自动跳过表头、处理 GBK 乱码并按（来源 + 交易单号）幂等去重。",
+    chips: ["支付宝 24 行表头", "微信 16 行", "CSV", "GBK", "≤10MB"],
+    href: "/import/csv",
+    action: "选择文件",
+    day: null,
   },
   {
     icon: ImageIcon,
     title: "截图识别（本地 OCR）",
-    description: "上传账单列表截图，浏览器本地识别，原图不上传服务端。",
-    chips: ["最多 8 张", "PNG / JPG", "不上传原图"],
+    description: "上传账单列表截图，浏览器本地识别，原图不上传服务端；识别结果逐条校对后入账。",
+    chips: ["最多 8 张", "PNG / JPG", "不上传原图", "可在浏览器禁用"],
     href: null,
-    day: "第 6 天",
+    action: null,
+    day: "第 19 天",
   },
   {
     icon: PenLine,
@@ -25,6 +28,7 @@ const ENTRIES = [
     description: "无单号、无明细的一笔收支，30 秒录入；时间留空默认 12:00。",
     chips: ["来源 MANUAL", "自动分类", "无需单号"],
     href: "/import/quick",
+    action: "开始填写",
     day: null,
   },
 ];
@@ -52,8 +56,8 @@ export default function ImportPage() {
                 ))}
               </div>
               <div className="mt-auto pt-1">
-                {entry.href ? (
-                  <ButtonLink href={entry.href}>开始填写</ButtonLink>
+                {entry.href && entry.action ? (
+                  <ButtonLink href={entry.href}>{entry.action}</ButtonLink>
                 ) : (
                   <Chip tone="warn">{entry.day}实现</Chip>
                 )}
@@ -63,9 +67,7 @@ export default function ImportPage() {
         })}
       </div>
 
-      <p className="rounded-sm border border-dashed border-line bg-canvas px-3 py-2 text-[9.5px] leading-relaxed text-ink-4">
-        导入历史、解析预览与失败行导出在 W05 / W06 的流程里，第 6 天实现；本页当前只做入口壳。
-      </p>
+      <ImportHistory />
     </div>
   );
 }

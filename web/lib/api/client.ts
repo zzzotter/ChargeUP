@@ -9,6 +9,11 @@ import type {
   CategorySuggestion,
   CategoryType,
   CategoryWithCount,
+  CsvPreview,
+  ImportCommitRow,
+  ImportRecord,
+  ImportResult,
+  ImportSource,
   InboxResult,
   MonthSummary,
   NewTransactionInput,
@@ -54,13 +59,17 @@ const REQUEST_TIMEOUT_MS = 8000;
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
 
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       ...init,
       signal: controller.signal,
       cache: "no-store",
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      headers: {
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        ...(init?.headers ?? {}),
+      },
     });
 
     if (!response.ok) {
@@ -116,6 +125,31 @@ export function getCategoryBreakdown(month: string): Promise<CategorySlice[]> {
   const params = new URLSearchParams();
   if (month) params.set("month", month);
   return request<CategorySlice[]>(`/stats/categories?${params.toString()}`);
+}
+
+/* ------------------------------------------------------------ 账单导入（CSV） */
+
+export function previewCsv(file: File): Promise<CsvPreview> {
+  const form = new FormData();
+  form.append("file", file);
+  return request<CsvPreview>("/imports/csv", { method: "POST", body: form });
+}
+
+export function commitCsvImport(input: {
+  fileName: string;
+  source: ImportSource;
+  rows: ImportCommitRow[];
+  failed?: number;
+  duplicated?: number;
+}): Promise<ImportResult> {
+  return request<ImportResult>("/imports/csv/commit", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function listImports(): Promise<ImportRecord[]> {
+  return request<ImportRecord[]>("/imports");
 }
 
 /* -------------------------------------------------------------- 预算与预警 */

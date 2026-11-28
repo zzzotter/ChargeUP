@@ -49,6 +49,8 @@ export type Transaction = {
   direction: TxDirection;
   status: TxStatus;
   note?: string;
+  /** 外部交易单号（CSV 导入用）；手动/截图记录由系统生成 */
+  externalId?: string | null;
   /** 退款行指向被退的原始交易（金额相反、7 天内） */
   refundOfTransactionId?: string | null;
   /** 软删除标记；有值即视为已移入回收 */
@@ -151,7 +153,6 @@ export type Budget = {
 };
 
 export type AlertLevel = "WARN" | "ALERT";
-
 /** 跨阈值事件：同一 period + level 只允许一条（§F-P0-06） */
 export type AlertEvent = {
   id: string;
@@ -185,3 +186,59 @@ export type ApiErrorBody = {
   message: string;
   details?: Array<{ field: string; reason: string }>;
 };
+
+/* ------------------------------------------------------------ 账单导入（CSV） */
+
+export type ImportSource = "ALIPAY" | "WECHAT";
+export type ImportRowStatus = "new" | "duplicate" | "failed";
+
+/** 解析后的一行：status 由「解析结果 + 库内去重」共同决定 */
+export type ImportParsedRow = {
+  /** 文件中的行号（1 起，含表头） */
+  rowNumber: number;
+  occurredAt: string | null;
+  merchant: string;
+  note: string | null;
+  /** 整数「分」 */
+  amount: number | null;
+  direction: TxDirection | null;
+  externalId: string | null;
+  status: ImportRowStatus;
+  /** 失败或跳过原因，直接展示给用户 */
+  reason?: string;
+};
+
+export type CsvPreview = {
+  fileName: string;
+  size: number;
+  source: ImportSource | null;
+  /** 表头行数（跳过的非数据行） */
+  skippedHeaderRows: number;
+  totalRows: number;
+  newCount: number;
+  duplicated: number;
+  failed: number;
+  rows: ImportParsedRow[];
+};
+
+/** 确认入账时只提交 new 行 */
+export type ImportCommitRow = {
+  occurredAt: string;
+  merchant: string;
+  note?: string | null;
+  amount: number;
+  direction: TxDirection;
+  externalId: string;
+};
+
+export type ImportResult = {
+  importId: string;
+  fileName: string;
+  source: ImportSource;
+  created: number;
+  duplicated: number;
+  failed: number;
+  createdAt: string;
+};
+
+export type ImportRecord = ImportResult;
